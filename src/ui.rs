@@ -96,12 +96,9 @@ impl SelectionApp {
     }
 
     fn select_all(&mut self, ctx: &egui::Context) {
-        let ppp = ctx.pixels_per_point();
-        self.selection_start = Some(egui::pos2(0.0, 0.0));
-        self.selection_end = Some(egui::pos2(
-            self.width as f32 / ppp,
-            self.height as f32 / ppp,
-        ));
+        let rect = ctx.screen_rect();
+        self.selection_start = Some(rect.min);
+        self.selection_end = Some(rect.max);
     }
 
     fn draw_arrow_points(&self, start: egui::Pos2, end: egui::Pos2) -> Vec<egui::Pos2> {
@@ -184,7 +181,6 @@ impl SelectionApp {
                     let rh = y1.abs_diff(y2);
                     if rw > 0 && rh > 0 {
                         let sub = imageops::crop_imm(&img, rx, ry, rw, rh).to_image();
-                        // Aumentado para 48 para ocultamento absoluto
                         let block_size = 48;
                         let small = imageops::resize(
                             &sub,
@@ -222,8 +218,8 @@ impl SelectionApp {
         let (x, y) = self.point_to_pixel(rect.min, ctx);
         let (x2, y2) = self.point_to_pixel(rect.max, ctx);
         if let Some(path) = FileDialog::new()
-            .add_filter("PNG", &["png"])
-            .set_file_name("theoshot.png")
+            .set_file_name("screenshot.png")
+            .add_filter("PNG Image", &["png"])
             .save_file()
         {
             let cropped =
@@ -272,7 +268,6 @@ impl SelectionApp {
             }
             Tool::Blur if shape.points.len() >= 2 => {
                 let rect = egui::Rect::from_two_pos(shape.points[0], shape.points[1]);
-                // Efeito Mosaic real na UI - Sem bordas e com blocos maiores
                 let size = 48.0;
                 let mut x = rect.min.x;
                 while x < rect.max.x {
@@ -301,11 +296,9 @@ impl SelectionApp {
             Tool::Text => {
                 let mut display_text = shape.text.clone();
                 if is_current {
-                    // Cursor piscante
                     if (ctx.input(|i| i.time) * 2.0) as i64 % 2 == 0 {
                         display_text.push('|');
                     }
-                    // Destaque de edição
                     painter.rect_filled(
                         egui::Rect::from_two_pos(
                             shape.points[0],
@@ -336,32 +329,18 @@ impl eframe::App for SelectionApp {
                 .chunks_exact(4)
                 .map(|c| egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]))
                 .collect();
-            self.texture = Some(ctx.load_texture(
-                "bg",
-                egui::ColorImage {
-                    size: [self.width as usize, self.height as usize],
-                    pixels,
-                },
-                egui::TextureOptions::default(),
-            ));
+            self.texture = Some(ctx.load_texture("bg", egui::ColorImage {
+                size: [self.width as usize, self.height as usize],
+                pixels,
+            }, egui::TextureOptions::default()));
         }
 
-        let ppp = ctx.pixels_per_point();
-        let full_rect = egui::Rect::from_min_size(
-            egui::pos2(0.0, 0.0),
-            egui::vec2(self.width as f32 / ppp, self.height as f32 / ppp),
-        );
+        let full_rect = ctx.screen_rect();
         let sel_rect = self.get_selection_rect();
 
         // Atalhos globais
-        let ctrl_c = ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::CTRL, egui::Key::C)
-                || i.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
-        });
-        let ctrl_a = ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::CTRL, egui::Key::A)
-                || i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)
-        });
+        let ctrl_c = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::C) || i.consume_key(egui::Modifiers::COMMAND, egui::Key::C));
+        let ctrl_a = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::A) || i.consume_key(egui::Modifiers::COMMAND, egui::Key::A));
         let esc = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
 
         if esc {
@@ -371,9 +350,8 @@ impl eframe::App for SelectionApp {
             self.select_all(ctx);
         }
         if ctrl_c {
-            let sel = self.get_selection_rect().unwrap_or(full_rect);
+            let sel = sel_rect.unwrap_or(full_rect);
             self.copy_clipboard(sel, ctx);
-            std::process::exit(0);
         }
 
         egui::CentralPanel::default()
@@ -381,7 +359,6 @@ impl eframe::App for SelectionApp {
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let painter = ui.painter();
-                let sel_rect = self.get_selection_rect();
 
                 if let Some(tex) = &self.texture {
                     painter.image(
@@ -394,82 +371,21 @@ impl eframe::App for SelectionApp {
 
                 let overlay_color = egui::Color32::from_rgba_unmultiplied(10, 15, 25, 160);
                 if let Some(sel) = sel_rect {
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, sel.min.y)),
-                        0.0,
-                        overlay_color,
-                    );
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(egui::pos2(rect.min.x, sel.max.y), rect.max),
-                        0.0,
-                        overlay_color,
-                    );
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(
-                            egui::pos2(rect.min.x, sel.min.y),
-                            egui::pos2(sel.min.x, sel.max.y),
-                        ),
-                        0.0,
-                        overlay_color,
-                    );
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(
-                            egui::pos2(sel.max.x, sel.min.y),
-                            egui::pos2(rect.max.x, sel.max.y),
-                        ),
-                        0.0,
-                        overlay_color,
-                    );
-                    painter.rect_stroke(
-                        sel,
-                        0.0,
-                        egui::Stroke::new(2.5, egui::Color32::from_white_alpha(200)),
-                        egui::StrokeKind::Outside,
-                    );
+                    painter.rect_filled(egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, sel.min.y)), 0.0, overlay_color);
+                    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(rect.min.x, sel.max.y), rect.max), 0.0, overlay_color);
+                    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(rect.min.x, sel.min.y), egui::pos2(sel.min.x, sel.max.y)), 0.0, overlay_color);
+                    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(sel.max.x, sel.min.y), egui::pos2(rect.max.x, sel.max.y)), 0.0, overlay_color);
 
-                    let mouse_pos =
-                        ctx.input(|i| i.pointer.interact_pos().unwrap_or(egui::Pos2::ZERO));
                     let handles = [
-                        (
-                            sel.left_top(),
-                            Handle::TopLeft,
-                            egui::CursorIcon::ResizeNwSe,
-                        ),
-                        (
-                            sel.right_top(),
-                            Handle::TopRight,
-                            egui::CursorIcon::ResizeNeSw,
-                        ),
-                        (
-                            sel.left_bottom(),
-                            Handle::BottomLeft,
-                            egui::CursorIcon::ResizeNeSw,
-                        ),
-                        (
-                            sel.right_bottom(),
-                            Handle::BottomRight,
-                            egui::CursorIcon::ResizeNwSe,
-                        ),
+                        (sel.left_top(), Handle::TopLeft, egui::CursorIcon::ResizeNwSe),
+                        (sel.right_top(), Handle::TopRight, egui::CursorIcon::ResizeNeSw),
+                        (sel.left_bottom(), Handle::BottomLeft, egui::CursorIcon::ResizeNeSw),
+                        (sel.right_bottom(), Handle::BottomRight, egui::CursorIcon::ResizeNwSe),
                     ];
                     for (pos, _handle, icon) in handles {
-                        let dist = (mouse_pos - pos).length();
-                        let is_hovered = dist < 12.0;
-                        let size = if is_hovered { 7.0 } else { 5.0 };
-                        let color = if is_hovered {
-                            egui::Color32::from_rgb(0, 255, 127)
-                        } else {
-                            egui::Color32::WHITE
-                        };
-                        painter.circle_filled(pos, size, color);
-                        if is_hovered {
-                            ctx.set_cursor_icon(icon);
-                        }
-                    }
-                    if sel.contains(mouse_pos)
-                        && self.current_tool == Tool::Select
-                        && self.active_handle == Handle::None
-                    {
-                        ctx.set_cursor_icon(egui::CursorIcon::Grab);
+                        let is_hovered = (ctx.input(|i| i.pointer.interact_pos()).unwrap_or_default() - pos).length() < 12.0;
+                        painter.circle_filled(pos, if is_hovered { 7.0 } else { 5.0 }, if is_hovered { egui::Color32::from_rgb(0, 255, 127) } else { egui::Color32::WHITE });
+                        if is_hovered { ctx.set_cursor_icon(icon); }
                     }
                 } else {
                     painter.rect_filled(rect, 0.0, overlay_color);
@@ -489,20 +405,8 @@ impl eframe::App for SelectionApp {
                         for event in events {
                             match event {
                                 egui::Event::Text(ref t) => shape.text.push_str(t),
-                                egui::Event::Key {
-                                    key: egui::Key::Backspace,
-                                    pressed: true,
-                                    ..
-                                } => {
-                                    shape.text.pop();
-                                }
-                                egui::Event::Key {
-                                    key: egui::Key::Enter,
-                                    pressed: true,
-                                    ..
-                                } => {
-                                    finished = true;
-                                }
+                                egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } => { shape.text.pop(); }
+                                egui::Event::Key { key: egui::Key::Enter, pressed: true, .. } => { finished = true; }
                                 _ => {}
                             }
                         }
@@ -519,19 +423,12 @@ impl eframe::App for SelectionApp {
 
                 if response.drag_started() {
                     if let (Some(p), Some(sel)) = (pos, sel_rect) {
-                        if (p - sel.left_top()).length() < 15.0 {
-                            self.active_handle = Handle::TopLeft;
-                        } else if (p - sel.right_top()).length() < 15.0 {
-                            self.active_handle = Handle::TopRight;
-                        } else if (p - sel.left_bottom()).length() < 15.0 {
-                            self.active_handle = Handle::BottomLeft;
-                        } else if (p - sel.right_bottom()).length() < 15.0 {
-                            self.active_handle = Handle::BottomRight;
-                        } else if sel.contains(p) && self.current_tool == Tool::Select {
-                            self.active_handle = Handle::Move;
-                        } else {
-                            self.active_handle = Handle::None;
-                        }
+                        if (p - sel.left_top()).length() < 15.0 { self.active_handle = Handle::TopLeft; }
+                        else if (p - sel.right_top()).length() < 15.0 { self.active_handle = Handle::TopRight; }
+                        else if (p - sel.left_bottom()).length() < 15.0 { self.active_handle = Handle::BottomLeft; }
+                        else if (p - sel.right_bottom()).length() < 15.0 { self.active_handle = Handle::BottomRight; }
+                        else if sel.contains(p) && self.current_tool == Tool::Select { self.active_handle = Handle::Move; }
+                        else { self.active_handle = Handle::None; }
                     }
                     if self.active_handle == Handle::None {
                         if self.current_tool == Tool::Select {
@@ -555,16 +452,12 @@ impl eframe::App for SelectionApp {
                             Handle::TopLeft => self.selection_start = Some(p),
                             Handle::BottomRight => self.selection_end = Some(p),
                             Handle::TopRight => {
-                                self.selection_start =
-                                    Some(egui::pos2(self.selection_start.unwrap().x, p.y));
-                                self.selection_end =
-                                    Some(egui::pos2(p.x, self.selection_end.unwrap().y));
+                                self.selection_start = Some(egui::pos2(self.selection_start.unwrap().x, p.y));
+                                self.selection_end = Some(egui::pos2(p.x, self.selection_end.unwrap().y));
                             }
                             Handle::BottomLeft => {
-                                self.selection_start =
-                                    Some(egui::pos2(p.x, self.selection_start.unwrap().y));
-                                self.selection_end =
-                                    Some(egui::pos2(self.selection_end.unwrap().x, p.y));
+                                self.selection_start = Some(egui::pos2(p.x, self.selection_start.unwrap().y));
+                                self.selection_end = Some(egui::pos2(self.selection_start.unwrap().x, p.y));
                             }
                             Handle::Move => {
                                 let delta = response.drag_delta();
@@ -575,11 +468,8 @@ impl eframe::App for SelectionApp {
                                 if self.current_tool == Tool::Select {
                                     self.selection_end = Some(p);
                                 } else if let Some(shape) = &mut self.current_shape {
-                                    if shape.tool == Tool::Pen {
-                                        shape.points.push(p);
-                                    } else {
-                                        shape.points[1] = p;
-                                    }
+                                    if shape.tool == Tool::Pen { shape.points.push(p); }
+                                    else { shape.points[1] = p; }
                                 }
                             }
                         }
@@ -608,17 +498,10 @@ impl eframe::App for SelectionApp {
         egui::Area::new(egui::Id::new("toolbar"))
             .fixed_pos(toolbar_pos)
             .show(ctx, |ui| {
-                let shadow = egui::epaint::Shadow {
-                    offset: [0, 8],
-                    blur: 16,
-                    spread: 0,
-                    color: egui::Color32::from_black_alpha(100),
-                };
                 egui::Frame::NONE
                     .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 25, 235))
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(35)))
                     .corner_radius(egui::CornerRadius::same(20))
-                    .shadow(shadow)
                     .inner_margin(10.0)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -636,54 +519,23 @@ impl eframe::App for SelectionApp {
                             ];
                             for (t, icon, name) in tools {
                                 let is_active = self.current_tool == t;
-                                if ui
-                                    .selectable_label(
-                                        is_active,
-                                        egui::RichText::new(icon).size(20.0).color(if is_active {
-                                            egui::Color32::WHITE
-                                        } else {
-                                            egui::Color32::from_white_alpha(140)
-                                        }),
-                                    )
-                                    .on_hover_text(name)
-                                    .clicked()
-                                {
-                                    if t == Tool::SelectAll {
-                                        self.select_all(ctx);
-                                        self.current_tool = Tool::Select;
-                                    } else {
-                                        self.current_tool = t;
-                                    }
+                                if ui.selectable_label(is_active, egui::RichText::new(icon).size(20.0).color(if is_active { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(140) }))
+                                    .on_hover_text(name).clicked() {
+                                    if t == Tool::SelectAll { self.select_all(ctx); self.current_tool = Tool::Select; }
+                                    else { self.current_tool = t; }
                                 }
                             }
                             ui.separator();
-                            if ui.button(egui::RichText::new("⟲").size(18.0)).clicked() {
-                                if let Some(s) = self.shapes.pop() {
-                                    self.redo_stack.push(s);
-                                }
-                            }
-                            if ui.button(egui::RichText::new("⟳").size(18.0)).clicked() {
-                                if let Some(s) = self.redo_stack.pop() {
-                                    self.shapes.push(s);
-                                }
-                            }
+                            if ui.button(egui::RichText::new("⟲").size(18.0)).clicked() { if let Some(s) = self.shapes.pop() { self.redo_stack.push(s); } }
+                            if ui.button(egui::RichText::new("⟳").size(18.0)).clicked() { if let Some(s) = self.redo_stack.pop() { self.shapes.push(s); } }
                             ui.separator();
                             if ui.button(egui::RichText::new("📋").size(20.0)).clicked() {
-                                self.copy_clipboard(sel_rect.unwrap_or(full_rect), ctx);
+                                let sel = sel_rect.unwrap_or(full_rect);
+                                self.copy_clipboard(sel, ctx);
                             }
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new("💾")
-                                            .size(20.0)
-                                            .color(egui::Color32::WHITE),
-                                    )
-                                    .corner_radius(egui::CornerRadius::same(10))
-                                    .fill(egui::Color32::from_rgba_unmultiplied(60, 130, 255, 180)),
-                                )
-                                .clicked()
-                            {
-                                self.save_file(sel_rect.unwrap_or(full_rect), ctx);
+                            if ui.add(egui::Button::new(egui::RichText::new("💾").size(20.0).color(egui::Color32::WHITE)).corner_radius(egui::CornerRadius::same(10)).fill(egui::Color32::from_rgba_unmultiplied(60, 130, 255, 180))).clicked() {
+                                let sel = sel_rect.unwrap_or(full_rect);
+                                self.save_file(sel, ctx);
                             }
                         });
                     });
@@ -701,9 +553,5 @@ pub fn run_ui(image_data: Option<Vec<u8>>, width: u32, height: u32) {
             .with_always_on_top(),
         ..Default::default()
     };
-    let _ = eframe::run_native(
-        "theoshot",
-        options,
-        Box::new(|_cc| Ok(Box::new(SelectionApp::new(image_data, width, height)))),
-    );
+    eframe::run_native("theoshot", options, Box::new(|_cc| Ok(Box::new(SelectionApp::new(image_data, width, height))))).unwrap();
 }
