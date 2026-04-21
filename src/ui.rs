@@ -1,7 +1,8 @@
+use ab_glyph::{FontVec, PxScale};
 use arboard::{Clipboard, ImageData};
 use eframe::egui;
-use image::{Rgba, RgbaImage};
-use imageproc::drawing::{draw_hollow_rect_mut, draw_line_segment_mut};
+use image::{Rgba, RgbaImage, imageops};
+use imageproc::drawing::{draw_hollow_rect_mut, draw_line_segment_mut, draw_text_mut};
 use imageproc::rect::Rect as ProcRect;
 use rfd::FileDialog;
 use std::borrow::Cow;
@@ -9,9 +10,12 @@ use std::borrow::Cow;
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Tool {
     Select,
+    SelectAll,
     Rectangle,
     Pen,
     Arrow,
+    Blur,
+    Text,
 }
 
 #[derive(Clone, Debug)]
@@ -20,6 +24,7 @@ struct Shape {
     points: Vec<egui::Pos2>,
     color: egui::Color32,
     thickness: f32,
+    text: String,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -90,6 +95,15 @@ impl SelectionApp {
         }
     }
 
+    fn select_all(&mut self, ctx: &egui::Context) {
+        let ppp = ctx.pixels_per_point();
+        self.selection_start = Some(egui::pos2(0.0, 0.0));
+        self.selection_end = Some(egui::pos2(
+            self.width as f32 / ppp,
+            self.height as f32 / ppp,
+        ));
+    }
+
     fn draw_arrow_points(&self, start: egui::Pos2, end: egui::Pos2) -> Vec<egui::Pos2> {
         let head_length = 20.0;
         let head_angle = 0.5;
@@ -112,6 +126,12 @@ impl SelectionApp {
             .cloned()
             .unwrap_or_else(|| vec![0; (self.width * self.height * 4) as usize]);
         let mut img = RgbaImage::from_raw(self.width, self.height, data).expect("Buffer error");
+
+        let font_data = std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+            .ok()
+            .or_else(|| std::fs::read("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf").ok());
+        let font = font_data.and_then(|d| FontVec::try_from_vec(d).ok());
+
         for shape in &self.shapes {
             let color = Rgba([
                 shape.color.r(),
@@ -152,6 +172,42 @@ impl SelectionApp {
                             (p1.0 as f32, p1.1 as f32),
                             (p2.0 as f32, p2.1 as f32),
                             color,
+                        );
+                    }
+                }
+                Tool::Blur if shape.points.len() >= 2 => {
+                    let (x1, y1) = self.point_to_pixel(shape.points[0], ctx);
+                    let (x2, y2) = self.point_to_pixel(shape.points[1], ctx);
+                    let rx = x1.min(x2);
+                    let ry = y1.min(y2);
+                    let rw = x1.abs_diff(x2);
+                    let rh = y1.abs_diff(y2);
+                    if rw > 0 && rh > 0 {
+                        let sub = imageops::crop_imm(&img, rx, ry, rw, rh).to_image();
+                        // Aumentado para 48 para ocultamento absoluto
+                        let block_size = 48;
+                        let small = imageops::resize(
+                            &sub,
+                            (rw / block_size).max(1),
+                            (rh / block_size).max(1),
+                            imageops::FilterType::Nearest,
+                        );
+                        let pixelated =
+                            imageops::resize(&small, rw, rh, imageops::FilterType::Nearest);
+                        imageops::replace(&mut img, &pixelated, rx as i64, ry as i64);
+                    }
+                }
+                Tool::Text if !shape.text.is_empty() => {
+                    if let Some(ref f) = font {
+                        let (x, y) = self.point_to_pixel(shape.points[0], ctx);
+                        draw_text_mut(
+                            &mut img,
+                            color,
+                            x as i32,
+                            y as i32,
+                            PxScale::from(32.0),
+                            f,
+                            &shape.text,
                         );
                     }
                 }
@@ -197,7 +253,13 @@ impl SelectionApp {
         std::process::exit(0);
     }
 
-    fn draw_shape_ui(&self, painter: &egui::Painter, shape: &Shape) {
+    fn draw_shape_ui(
+        &self,
+        painter: &egui::Painter,
+        shape: &Shape,
+        is_current: bool,
+        ctx: &egui::Context,
+    ) {
         let stroke = egui::Stroke::new(shape.thickness, shape.color);
         match shape.tool {
             Tool::Rectangle if shape.points.len() >= 2 => {
@@ -207,6 +269,23 @@ impl SelectionApp {
                     stroke,
                     egui::StrokeKind::Outside,
                 );
+            }
+            Tool::Blur if shape.points.len() >= 2 => {
+                let rect = egui::Rect::from_two_pos(shape.points[0], shape.points[1]);
+                // Efeito Mosaic real na UI - Sem bordas e com blocos maiores
+                let size = 48.0;
+                let mut x = rect.min.x;
+                while x < rect.max.x {
+                    let mut y = rect.min.y;
+                    while y < rect.max.y {
+                        let cell =
+                            egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(size, size))
+                                .intersect(rect);
+                        painter.rect_filled(cell, 0.0, egui::Color32::from_black_alpha(240));
+                        y += size;
+                    }
+                    x += size;
+                }
             }
             Tool::Arrow if shape.points.len() >= 2 => {
                 let pts = self.draw_arrow_points(shape.points[0], shape.points[1]);
@@ -218,6 +297,31 @@ impl SelectionApp {
                 for i in 0..shape.points.len().saturating_sub(1) {
                     painter.line_segment([shape.points[i], shape.points[i + 1]], stroke);
                 }
+            }
+            Tool::Text => {
+                let mut display_text = shape.text.clone();
+                if is_current {
+                    // Cursor piscante
+                    if (ctx.input(|i| i.time) * 2.0) as i64 % 2 == 0 {
+                        display_text.push('|');
+                    }
+                    // Destaque de edição
+                    painter.rect_filled(
+                        egui::Rect::from_two_pos(
+                            shape.points[0],
+                            shape.points[0] + egui::vec2(100.0, 24.0),
+                        ),
+                        4.0,
+                        egui::Color32::from_white_alpha(20),
+                    );
+                }
+                painter.text(
+                    shape.points[0],
+                    egui::Align2::LEFT_TOP,
+                    display_text,
+                    egui::FontId::proportional(24.0),
+                    shape.color,
+                );
             }
             _ => {}
         }
@@ -238,8 +342,38 @@ impl eframe::App for SelectionApp {
                     size: [self.width as usize, self.height as usize],
                     pixels,
                 },
-                Default::default(),
+                egui::TextureOptions::default(),
             ));
+        }
+
+        let ppp = ctx.pixels_per_point();
+        let full_rect = egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(self.width as f32 / ppp, self.height as f32 / ppp),
+        );
+        let sel_rect = self.get_selection_rect();
+
+        // Atalhos globais
+        let ctrl_c = ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::CTRL, egui::Key::C)
+                || i.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
+        });
+        let ctrl_a = ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::CTRL, egui::Key::A)
+                || i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)
+        });
+        let esc = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+
+        if esc {
+            std::process::exit(0);
+        }
+        if ctrl_a {
+            self.select_all(ctx);
+        }
+        if ctrl_c {
+            let sel = self.get_selection_rect().unwrap_or(full_rect);
+            self.copy_clipboard(sel, ctx);
+            std::process::exit(0);
         }
 
         egui::CentralPanel::default()
@@ -293,7 +427,6 @@ impl eframe::App for SelectionApp {
                         egui::StrokeKind::Outside,
                     );
 
-                    // Feedback visual nas alças
                     let mouse_pos =
                         ctx.input(|i| i.pointer.interact_pos().unwrap_or(egui::Pos2::ZERO));
                     let handles = [
@@ -318,7 +451,6 @@ impl eframe::App for SelectionApp {
                             egui::CursorIcon::ResizeNwSe,
                         ),
                     ];
-
                     for (pos, _handle, icon) in handles {
                         let dist = (mouse_pos - pos).length();
                         let is_hovered = dist < 12.0;
@@ -333,7 +465,6 @@ impl eframe::App for SelectionApp {
                             ctx.set_cursor_icon(icon);
                         }
                     }
-
                     if sel.contains(mouse_pos)
                         && self.current_tool == Tool::Select
                         && self.active_handle == Handle::None
@@ -345,10 +476,42 @@ impl eframe::App for SelectionApp {
                 }
 
                 for shape in &self.shapes {
-                    self.draw_shape_ui(painter, shape);
+                    self.draw_shape_ui(painter, shape, false, ctx);
                 }
                 if let Some(shape) = &self.current_shape {
-                    self.draw_shape_ui(painter, shape);
+                    self.draw_shape_ui(painter, shape, true, ctx);
+                }
+
+                if self.current_tool == Tool::Text {
+                    let mut finished = false;
+                    if let Some(shape) = &mut self.current_shape {
+                        let events = ctx.input(|i| i.events.clone());
+                        for event in events {
+                            match event {
+                                egui::Event::Text(ref t) => shape.text.push_str(t),
+                                egui::Event::Key {
+                                    key: egui::Key::Backspace,
+                                    pressed: true,
+                                    ..
+                                } => {
+                                    shape.text.pop();
+                                }
+                                egui::Event::Key {
+                                    key: egui::Key::Enter,
+                                    pressed: true,
+                                    ..
+                                } => {
+                                    finished = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if finished {
+                        if let Some(shape) = self.current_shape.take() {
+                            self.shapes.push(shape);
+                        }
+                    }
                 }
 
                 let response = ui.interact(rect, ui.id(), egui::Sense::drag());
@@ -380,6 +543,7 @@ impl eframe::App for SelectionApp {
                                 points: vec![p, p],
                                 color: self.stroke_color,
                                 thickness: 3.0,
+                                text: String::new(),
                             });
                         }
                     }
@@ -406,7 +570,6 @@ impl eframe::App for SelectionApp {
                                 let delta = response.drag_delta();
                                 self.selection_start = Some(self.selection_start.unwrap() + delta);
                                 self.selection_end = Some(self.selection_end.unwrap() + delta);
-                                ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
                             }
                             Handle::None => {
                                 if self.current_tool == Tool::Select {
@@ -425,113 +588,106 @@ impl eframe::App for SelectionApp {
 
                 if response.drag_stopped() {
                     if let Some(shape) = self.current_shape.take() {
-                        self.shapes.push(shape);
-                        self.redo_stack.clear();
+                        if shape.tool != Tool::Text {
+                            self.shapes.push(shape);
+                            self.redo_stack.clear();
+                        } else {
+                            self.current_shape = Some(shape);
+                        }
                     }
                     self.active_handle = Handle::None;
                 }
-                if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    std::process::exit(0);
-                }
             });
 
-        if let Some(sel) = self.get_selection_rect() {
-            egui::Area::new(egui::Id::new("toolbar"))
-                .fixed_pos(sel.max + egui::vec2(-380.0, 20.0))
-                .show(ctx, |ui| {
-                    let shadow = egui::epaint::Shadow {
-                        offset: [0, 8],
-                        blur: 16,
-                        spread: 0,
-                        color: egui::Color32::from_black_alpha(100),
-                    };
-                    egui::Frame::NONE
-                        .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 25, 235))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(35)))
-                        .corner_radius(egui::CornerRadius::same(20))
-                        .shadow(shadow)
-                        .inner_margin(10.0)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing = egui::vec2(14.0, 0.0);
-                                ui.color_edit_button_srgba(&mut self.stroke_color)
-                                    .on_hover_text("Escolher Cor");
-                                ui.separator();
-                                let tools = [
-                                    (Tool::Select, "⛶", "Seleção"),
-                                    (Tool::Rectangle, "▢", "Retângulo"),
-                                    (Tool::Pen, "🖊", "Caneta"),
-                                    (Tool::Arrow, "↗", "Seta"),
-                                ];
-                                for (t, icon, name) in tools {
-                                    let is_active = self.current_tool == t;
-                                    if ui
-                                        .selectable_label(
-                                            is_active,
-                                            egui::RichText::new(icon).size(20.0).color(
-                                                if is_active {
-                                                    egui::Color32::WHITE
-                                                } else {
-                                                    egui::Color32::from_white_alpha(140)
-                                                },
-                                            ),
-                                        )
-                                        .on_hover_text(name)
-                                        .clicked()
-                                    {
+        let toolbar_pos = if let Some(sel) = sel_rect {
+            sel.max + egui::vec2(-450.0, 20.0)
+        } else {
+            egui::pos2(full_rect.center().x - 225.0, full_rect.max.y - 80.0)
+        };
+
+        egui::Area::new(egui::Id::new("toolbar"))
+            .fixed_pos(toolbar_pos)
+            .show(ctx, |ui| {
+                let shadow = egui::epaint::Shadow {
+                    offset: [0, 8],
+                    blur: 16,
+                    spread: 0,
+                    color: egui::Color32::from_black_alpha(100),
+                };
+                egui::Frame::NONE
+                    .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 25, 235))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(35)))
+                    .corner_radius(egui::CornerRadius::same(20))
+                    .shadow(shadow)
+                    .inner_margin(10.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(14.0, 0.0);
+                            ui.color_edit_button_srgba(&mut self.stroke_color);
+                            ui.separator();
+                            let tools = [
+                                (Tool::Select, "⛶", "Seleção"),
+                                (Tool::SelectAll, "🖥", "Selecionar Tudo"),
+                                (Tool::Rectangle, "▢", "Retângulo"),
+                                (Tool::Pen, "🖊", "Caneta"),
+                                (Tool::Arrow, "↗", "Seta"),
+                                (Tool::Blur, "💧", "Desfoque"),
+                                (Tool::Text, "A", "Texto"),
+                            ];
+                            for (t, icon, name) in tools {
+                                let is_active = self.current_tool == t;
+                                if ui
+                                    .selectable_label(
+                                        is_active,
+                                        egui::RichText::new(icon).size(20.0).color(if is_active {
+                                            egui::Color32::WHITE
+                                        } else {
+                                            egui::Color32::from_white_alpha(140)
+                                        }),
+                                    )
+                                    .on_hover_text(name)
+                                    .clicked()
+                                {
+                                    if t == Tool::SelectAll {
+                                        self.select_all(ctx);
+                                        self.current_tool = Tool::Select;
+                                    } else {
                                         self.current_tool = t;
                                     }
                                 }
-                                ui.separator();
-                                if ui
-                                    .button(egui::RichText::new("⟲").size(18.0))
-                                    .on_hover_text("Desfazer")
-                                    .clicked()
-                                {
-                                    if let Some(s) = self.shapes.pop() {
-                                        self.redo_stack.push(s);
-                                    }
+                            }
+                            ui.separator();
+                            if ui.button(egui::RichText::new("⟲").size(18.0)).clicked() {
+                                if let Some(s) = self.shapes.pop() {
+                                    self.redo_stack.push(s);
                                 }
-                                if ui
-                                    .button(egui::RichText::new("⟳").size(18.0))
-                                    .on_hover_text("Refazer")
-                                    .clicked()
-                                {
-                                    if let Some(s) = self.redo_stack.pop() {
-                                        self.shapes.push(s);
-                                    }
+                            }
+                            if ui.button(egui::RichText::new("⟳").size(18.0)).clicked() {
+                                if let Some(s) = self.redo_stack.pop() {
+                                    self.shapes.push(s);
                                 }
-                                ui.separator();
-                                if ui
-                                    .button(egui::RichText::new("📋").size(20.0))
-                                    .on_hover_text("Copiar para Clipboard")
-                                    .clicked()
-                                {
-                                    self.copy_clipboard(sel, ctx);
-                                }
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            egui::RichText::new("💾")
-                                                .size(20.0)
-                                                .color(egui::Color32::WHITE),
-                                        )
-                                        .corner_radius(egui::CornerRadius::same(10))
-                                        .fill(
-                                            egui::Color32::from_rgba_unmultiplied(
-                                                60, 130, 255, 180,
-                                            ),
-                                        ),
+                            }
+                            ui.separator();
+                            if ui.button(egui::RichText::new("📋").size(20.0)).clicked() {
+                                self.copy_clipboard(sel_rect.unwrap_or(full_rect), ctx);
+                            }
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("💾")
+                                            .size(20.0)
+                                            .color(egui::Color32::WHITE),
                                     )
-                                    .on_hover_text("Salvar como PNG")
-                                    .clicked()
-                                {
-                                    self.save_file(sel, ctx);
-                                }
-                            });
+                                    .corner_radius(egui::CornerRadius::same(10))
+                                    .fill(egui::Color32::from_rgba_unmultiplied(60, 130, 255, 180)),
+                                )
+                                .clicked()
+                            {
+                                self.save_file(sel_rect.unwrap_or(full_rect), ctx);
+                            }
                         });
-                });
-        }
+                    });
+            });
         ctx.request_repaint();
     }
 }

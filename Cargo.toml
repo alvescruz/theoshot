@@ -1,6 +1,6 @@
 [package]
 name = "theoshot"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 
 [dependencies]
@@ -11,3 +11,5 @@ eframe = "0.31.0"
 arboard = "3.4.1"
 rfd = "0.15.2"
 imageproc = "0.25.0"
+ab_glyph = "0.2.32"
+url = "2.5.8"

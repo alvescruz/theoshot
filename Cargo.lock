@@ -3661,8 +3661,9 @@ dependencies = [
 
 [[package]]
 name = "theoshot"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
+ "ab_glyph",
  "arboard",
  "ashpd 0.13.10",
  "eframe",
@@ -3670,6 +3671,7 @@ dependencies = [
  "imageproc",
  "rfd",
  "tokio",
+ "url",
 ]
 
 [[package]]
