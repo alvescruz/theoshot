@@ -6,12 +6,11 @@ edition = "2024"
 [dependencies]
 ashpd = { version = "0.13.10", features = ["screenshot"] }
 image = "0.25.10"
-tokio = { version = "1.52.1", features = ["full"] }
-eframe = "0.31.0"
+tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread"] }
+eframe = "0.30.0"
+egui-phosphor = "0.8.0"
 arboard = "3.4.1"
 rfd = "0.15.2"
 imageproc = "0.25.0"
 ab_glyph = "0.2.32"
 url = "2.5.8"
-display-info = "0.5.9"
-device_query = "4.0.1"
