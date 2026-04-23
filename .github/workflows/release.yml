@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -59,11 +57,15 @@ jobs:
           which cargo-deb || cargo install cargo-deb
           which cargo-generate-rpm || cargo install cargo-generate-rpm
           
-          # Gera o .deb (já configurado no Cargo.toml)
+          # Gera o .deb
           cargo deb --target ${{ matrix.target }} --no-build
           
-          # Gera o .rpm
-          cargo generate-rpm --target ${{ matrix.target }}
+          # Gera o .rpm (forçando o output para um local conhecido)
+          cargo generate-rpm --target ${{ matrix.target }} --output target/generate-rpm/theoshot.rpm
+          
+          # Debug: Mostrar o que foi gerado
+          ls -R target/debian || true
+          ls -R target/generate-rpm || true
 
       - name: Prepare Assets
         shell: bash
@@ -73,8 +75,8 @@ jobs:
           cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} dist/${{ matrix.asset_name }}
           # Pacotes Linux
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            cp target/${{ matrix.target }}/debian/*.deb dist/ || true
-            cp target/generate-rpm/*.rpm dist/ || true
+            find target/${{ matrix.target }}/debian -name "*.deb" -exec cp {} dist/ \;
+            find target/generate-rpm -name "*.rpm" -exec cp {} dist/ \;
           fi
 
       - name: Release
