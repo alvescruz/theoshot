@@ -16,14 +16,10 @@ assets = [
     ["target/release/theoshot", "usr/bin/theoshot", "755"],
 ]
 
-[package.metadata.rpm]
-package = "theoshot"
-
-[package.metadata.rpm.cargo]
-buildflags = ["--release"]
-
-[package.metadata.rpm.targets]
-theoshot = { path = "/usr/bin/theoshot" }
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/theoshot", dest = "/usr/bin/theoshot", mode = "755" },
+]
 
 [dependencies]
 ashpd = { version = "0.13.10", features = ["screenshot"] }
