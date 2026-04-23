@@ -1,7 +1,29 @@
 [package]
 name = "theoshot"
-version = "0.0.1"
+version = "0.1.0"
+authors = ["Alteon <alteonalves@gmail.com>"]
+description = "A simple screen capture and annotation tool for Linux"
+license = "MIT"
 edition = "2024"
+
+[package.metadata.deb]
+maintainer = "Alteon <alteonalves@gmail.com>"
+copyright = "2026, Alteon"
+depends = "libgtk-3-0, libdbus-1-3, libpipewire-0.3-0"
+section = "utility"
+priority = "optional"
+assets = [
+    ["target/release/theoshot", "usr/bin/theoshot", "755"],
+]
+
+[package.metadata.rpm]
+package = "theoshot"
+
+[package.metadata.rpm.cargo]
+buildflags = ["--release"]
+
+[package.metadata.rpm.targets]
+theoshot = { path = "/usr/bin/theoshot" }
 
 [dependencies]
 ashpd = { version = "0.13.10", features = ["screenshot"] }
