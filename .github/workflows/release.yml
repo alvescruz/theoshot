@@ -23,14 +23,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: theoshot
             asset_name: theoshot-linux-amd64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: theoshot.exe
-            asset_name: theoshot-windows-amd64.exe
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: theoshot
-            asset_name: theoshot-macos-amd64
 
     steps:
       - name: Checkout repository
